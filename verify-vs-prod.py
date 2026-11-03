@@ -12,10 +12,11 @@ Walks every page in the local sitemap and reports, per page:
 Run it manually until it reports clean:
 
   python3 verify-vs-prod.py
-  python3 verify-vs-prod.py --local http://localhost:8081 --prod https://jprconsultingllc.com
+  python3 verify-vs-prod.py --local http://localhost:8081   # --prod defaults to https://$SLD.$TLD from .env
 """
 
 import argparse
+import os
 import difflib
 import html
 import re
@@ -81,7 +82,9 @@ def asset_urls(page, base):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--local", default="http://localhost:8081")
-    ap.add_argument("--prod", default="https://jprconsultingllc.com")
+    # production URL from the site parameters in .env (SLD, TLD) unless given
+    site = os.environ.get("SLD") and os.environ.get("TLD")
+    ap.add_argument("--prod", default=f"https://{os.environ['SLD']}.{os.environ['TLD']}" if site else None, required=not site)
     ap.add_argument("--auth", help="user:pass for the --local side (staging)")
     args = ap.parse_args()
 

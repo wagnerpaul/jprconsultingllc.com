@@ -21,8 +21,6 @@ private-notes.md
 
 ## backups
 /backups
-/content.zip
-
 # --- added 2026-10-30: only the app ships ---
 # repo and editor files
 .dockerignore
@@ -51,3 +49,4 @@ package.json
 package-lock.json
 postcss.config.js
 .env*
+/content.zip

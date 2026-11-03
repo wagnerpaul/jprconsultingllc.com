@@ -1,101 +1,290 @@
-*Useful Docker Reference*
-note: the "SLD" environment variable refers to Second Level Domain
+# Development and deployment
 
+This project separates application code from Kirby-managed content.
 
-**Build local dev**
-    
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env -u) && \
-    docker build -t wagnerpaul/${SLD}-main-app:local .
+## Sources of truth
 
-**Run local dev container with interactive (-i flag) output for debugging, or detached (-d flag) to give you back the shell**
+- Git stores application code, templates, configuration, and theme assets.
+- Staging stores Kirby content and accounts in Docker volumes.
+- Backblaze B2 stores nightly staging content and account backups.
+- Production is a published copy of approved staging content.
 
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env -u) && \
-    docker run -i -v "`pwd`":/app -p 80:80 -e ENABLE_PANEL=true --name ${SLD}-local wagnerpaul/${SLD}-main-app:local
-    docker run -d -v "`pwd`":/app -p 80:80 -e ENABLE_PANEL=true --name ${SLD}-local wagnerpaul/${SLD}-main-app:local
+The `content/` directory is intentionally ignored by Git. Treat staging as the
+source of truth for content.
 
+## Requirements
 
+- Docker Desktop for local development
+- A docker context over SSH for remote operations, named by `SERVER` in `.env`
+- A project `.env` file
+- SSH access to that host (its key is in 1Password)
 
-*Building Staging and Prod*
+`SLD` and `TLD` name the site (`SLD.TLD`); `IMAGE`, `SERVER`, `BUILDER`
+and `COMPOSE_PROJECT_NAME` are the other instance parameters. All of them
+live in `.env`; no script or compose file carries a site-specific value.
 
-**create stg volumes**
+## Start a work session
 
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env ${DOCKER_MACHINE}) && \
-    docker volume create --name=${SLD}-stg-content && \
-    docker volume create --name=${SLD}-stg-media && \
-    docker volume create --name=${SLD}-stg-sessions
+Pull current staging content before local work that depends on content:
 
-**create accounts volume which is same on stg and prod**
+```sh
+./devops.sh sync-stg
+```
 
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env ${DOCKER_MACHINE}) && \
-    docker volume create --name=${SLD}-accounts
+The command downloads and validates staging content before replacing the local
+copy. It does not change staging.
 
-**build and deploy for stg, stg.blackletter.tech**
-note: memory can be a little low so just `docker-machine ssh docker-ubuntu-4gb-sfo2-01` and `reboot now`
+## Local Docker
 
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env ${DOCKER_MACHINE}) && \
-    docker build -t wagnerpaul/${SLD}-main-app:stg . && \
-    docker-compose up -d --force-recreate
+Build the local image:
 
-**create prod volumes**
+```sh
+set -o allexport
+source .env
+set +o allexport
+unset DOCKER_CONTEXT
+docker build -t "${IMAGE}:local" .
+```
 
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env ${DOCKER_MACHINE}) && \
-    docker volume create --name=${SLD}-prod-content && \
-    docker volume create --name=${SLD}-prod-media && \
-    docker volume create --name=${SLD}-prod-sessions
+Run the site at `http://localhost:8080`:
 
-**build and deploy for prod**
-note: modified into a promote strategy in the deploy.sh
+```sh
+docker run --rm -d \
+  --name "${SLD}-local" \
+  --volume "$(pwd):/app" \
+  --publish 8080:80 \
+  --env ENABLE_PANEL=true \
+  "${IMAGE}:local"
+```
 
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env ${DOCKER_MACHINE}) && \
-    docker build -t wagnerpaul/${SLD}-main-app:latest . && \
-    docker push wagnerpaul/${SLD}-main-app:latest && \
-    docker tag wagnerpaul/${SLD}-main-app:latest wagnerpaul/${SLD}-main-app:`date +%Y%m%d` && \
-    docker push wagnerpaul/${SLD}-main-app:`date +%Y%m%d` && \
-    docker-compose -f docker-compose.prod.yml up -d --force-recreate
+Stop the local container:
 
+```sh
+docker stop "${SLD}-local"
+```
 
+The interactive `devops.sh` menu also provides local build and run commands.
 
-*Commands for other tasks*
+## Content workflow
 
-**get remote shell**
-    
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env ${DOCKER_MACHINE}) && \
-    docker exec -it ${SLD}-stg /bin/sh   
-    docker exec -it ${SLD}-prod /bin/sh
+Use the staging Panel for normal page, layout, and site-setting changes.
 
-**copy files to remote docker app**
-    
-    set -o allexport; source .env; set +o allexport && \
-    eval $(docker-machine env ${DOCKER_MACHINE}) && \
+1. Run `./devops.sh sync-stg` when local content context is required.
+2. Make content changes in the staging Panel.
+3. Review the staging site.
+4. Publish approved staging content with the Panel publishing plugin.
 
-    docker exec -it ${SLD}-stg sh -c 'rm -rf /app/content/*'  && \
-    docker cp ./content ${SLD}-stg:app && \
-    docker cp ./storage/accounts ${SLD}-stg:app/storage
+Some development sessions also create content locally. Push that content with:
 
+```sh
+./devops.sh push-stg
+```
 
+This command performs these operations:
 
-**copy files from remote docker app**
+1. Validate the local content copy.
+2. Create a fresh staging content backup.
+3. Upload and validate the replacement content.
+4. Stop staging during the replacement.
+5. Restore the previous content if replacement fails.
+6. Restart staging and regenerate custom CSS.
 
-    set -o allexport; source .env; set +o allexport && \
-    docker cp ${SLD}-stg:app/content .
-    docker cp ${SLD}-stg:app/storage/accounts storage/ .
+Do not copy content into the container manually. The scripted workflow adds
+validation, backup, downtime control, and rollback.
 
-**periodic cleanup commands**
-https://docs.docker.com/engine/reference/commandline/image_prune/
-    
-    docker image prune -a
+Verify staging after a container restart or deployment:
 
-**letsencrypt certificate renew commands**
+```sh
+./devops.sh verify-stg
+```
 
-    set -o allexport; source .env; set +o allexport && \
-    docker exec $(PROXY_CONTAINER) /app/force_renew
+The command removes the cached homepage, requests it through the public HTTPS
+endpoint, and rejects HTTP media URLs. Do not prime the staging homepage cache
+with an internal HTTP request. Kirby page caching stores absolute media URLs,
+which causes browsers to block images as mixed content.
 
-test
+The staging host config also fixes Kirby's canonical URL to
+`https://stg.${SLD}.${TLD}`. This prevents direct internal HTTP requests
+from generating mixed-content URLs before the cache is populated.
+
+## Custom CSS
+
+The Panel field **Site > Styling > Custom CSS** is stored as `Customcss` in
+`content/site.en.txt`.
+
+Kirby writes that value to `public/assets/css/site.css` after a site-settings
+save. The container also regenerates the file during every startup, after the
+content volume is mounted.
+
+`site.css` is generated and ignored by Git. Do not edit or commit it directly.
+Edit the Panel field instead.
+
+## Application workflow
+
+Application changes flow in the opposite direction from content:
+
+1. Change code locally on a feature branch.
+2. Build and test the local image.
+3. Push the branch to GitHub.
+4. Build the staging image locally and ship it to the remote daemon.
+5. Verify staging before promoting the image to production.
+
+Never publish an untested application image directly to production.
+
+## Building images for the remote host
+
+The host (`SERVER`, Debian 13, current Docker) runs amd64. Build
+locally for that platform and ship the result; the 2GB host serves
+three sites and should not also compile extensions:
+
+```sh
+unset DOCKER_DEFAULT_PLATFORM
+docker buildx build --platform linux/amd64 \
+  -t "${IMAGE}:stg" --load .
+docker save "${IMAGE}:stg" | ssh "$SERVER" docker load
+```
+
+Then recreate the staging container:
+
+```sh
+export DOCKER_CONTEXT="$SERVER"
+docker compose up -d --force-recreate stg
+```
+
+Everything the app needs arrives as container environment: compose fills it
+from the 1Password Environment (`.env`) when it creates the container, and
+the entrypoint writes `/etc/nginx/.htpasswd` from `BASIC_AUTH_*` when
+`ENABLE_PW` is true. Nothing is copied into the container afterwards, and
+the image stays secret-free.
+
+`DOCKER_DEFAULT_PLATFORM` must stay unset for compose and build
+commands; it is set in the login shell and changes build targets.
+
+## Remote Docker access
+
+Load the project environment and select the remote Docker host:
+
+```sh
+set -o allexport
+source .env
+set +o allexport
+export DOCKER_CONTEXT="$SERVER"
+```
+
+Open a staging shell:
+
+```sh
+docker exec -it "${SLD}-stg" /bin/sh
+```
+
+Open a production shell:
+
+```sh
+docker exec -it "${SLD}-prod" /bin/sh
+```
+
+Staging and production share the Compose project and proxy network.
+
+## Backups
+
+Duplicity (the tecnativa/docker-duplicity image, pinned by digest) backs up
+these staging volumes to Backblaze B2 over its S3 endpoint:
+
+- `${SLD}-stg-content`
+- `${SLD}-accounts`
+
+Jobs run daily at 04:00 UTC: a backup (new full chain after one month), then
+retention keeping the latest three full chains, about three months of history.
+Both are JOB_* entries on the shared `backup-env` anchor in docker-compose.yml.
+Production content is published from staging, so the staging content backup is
+the content recovery source. Each backup container persists the duplicity
+cache in its own volume; without it, a recreated container re-syncs chain
+metadata from B2 before its first run.
+
+Run a backup cycle by hand (backup plus retention):
+
+```sh
+docker exec "${SLD}-content-backups-stg" /etc/periodic/daily/jobrunner
+```
+
+Inspect a chain:
+
+```sh
+docker exec "${SLD}-content-backups-stg" sh -c 'dup collection-status $DST'
+```
+
+Create and inspect backups through the interactive menu:
+
+```sh
+./devops.sh
+```
+
+Select **Staging**, then **Backup Staging** or **List Staging Backups**.
+**Recreate Staging Backup Containers** rebuilds the two duplicity containers
+from the current `.env` and compose file (run it after the B2 key or endpoint
+in 1Password changes) and then takes a backup.
+
+Equivalent commands are:
+
+```sh
+docker exec "${SLD}-content-backups-stg" backup
+docker exec "${SLD}-accounts-backups-stg" backup
+docker exec "${SLD}-content-backups-stg" list
+docker exec "${SLD}-accounts-backups-stg" list
+```
+
+The `list` operation can take several minutes when many chains exist.
+
+Run retention manually when required:
+
+```sh
+docker exec "${SLD}-content-backups-stg" remove-all-but-n-full 3 --force
+docker exec "${SLD}-accounts-backups-stg" remove-all-but-n-full 3 --force
+```
+
+This operation permanently deletes all older chains. Run a new backup and list
+the repository after cleanup.
+
+## Troubleshooting
+
+### Remote connection failures
+
+The context rides plain SSH. If remote Docker commands fail, test the
+transport first:
+
+```sh
+ssh "$SERVER" docker version
+```
+
+SSH signing goes through the 1Password agent; an unlocked 1Password and
+an approved SSH key for the host are prerequisites. The old
+docker-machine host (docker-ubuntu-4gb-sfo2-01) is retired; its
+certificate tooling no longer applies.
+
+### Shared proxy network
+
+Staging and production use the existing proxy network named by `PROXY_NETWORK`
+in `.env`. Compose files declare
+that network as external so Compose does not recreate or own it.
+
+### Image cleanup
+
+Review disk use before deleting images:
+
+```sh
+docker system df
+```
+
+Remove unused images only when disk pressure requires it:
+
+```sh
+docker image prune -a
+```
+
+### Certificate renewal
+
+Run the Let’s Encrypt renewal command on the remote Docker host:
+
+```sh
+docker exec letsencrypt /app/force_renew
+```

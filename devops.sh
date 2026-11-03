@@ -7,7 +7,23 @@
 # into the containers as environment; nothing is copied in afterwards.
 ENV_CONTENT=$(cat .env 2>/dev/null)
 [ -n "$ENV_CONTENT" ] || { echo ".env came back empty: unlock 1Password and approve the read, then rerun." >&2; exit 1; }
-set -o allexport; eval "$ENV_CONTENT"; set +o allexport
+# Parse KEY=value lines ourselves: 1Password writes values unquoted, so a
+# value with spaces (a cron slot) would break under eval or source.
+# Surrounding quotes, if present, are stripped; nothing is expanded.
+while IFS= read -r line; do
+    case $line in ''|'#'*) continue ;; esac
+    key=${line%%=*}; val=${line#*=}
+    case $val in
+        \"*\") val=${val#\"}; val=${val%\"} ;;
+        \'*\') val=${val#\'}; val=${val%\'} ;;
+    esac
+    export "$key=$val"
+done <<< "$ENV_CONTENT"
+
+# Every instance-specific value comes from .env; the script itself carries none.
+for v in SLD TLD SERVER BUILDER IMAGE COMPOSE_PROJECT_NAME; do
+    [ -n "${!v:-}" ] || { echo "$v is not set in .env (1Password Environment)." >&2; exit 1; }
+done
 
 # DOCKER_DEFAULT_PLATFORM from the login shell breaks remote compose/build
 unset DOCKER_DEFAULT_PLATFORM
@@ -33,10 +49,10 @@ fn_goodafternoon() { echo; echo "Good afternoon."; }
 
 fn_goodmorning() {
 
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
     echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
-    docker --context desktop-linux buildx build --platform linux/amd64 --load -t wagnerpaul/${SLD}-main-app:stg . && \
-    docker --context desktop-linux save wagnerpaul/${SLD}-main-app:stg | docker load && \
+    docker --context "$BUILDER" buildx build --platform linux/amd64 --load -t ${IMAGE}:stg . && \
+    docker --context "$BUILDER" save ${IMAGE}:stg | docker load && \
     docker-compose up -d --no-deps --no-build --force-recreate stg
 
 }
@@ -62,9 +78,9 @@ fn_fail() { echo "Wrong option." exit 1; }
 
 ### Menu Functions ##
 fn_docker_machine_ssh() {
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
     echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
-    ssh blt-pub02
+    ssh "$SERVER"
 }
 
 
@@ -73,12 +89,12 @@ fn_deployapp() {
     then
         # the 2GB host never builds: build for amd64 on this Mac, ship the
         # image over the context, recreate only the app service
-        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
         echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
-        echo $(yellowprint "Building wagnerpaul/${SLD}-main-app:${1} for linux/amd64 on this Mac") && \
-        docker --context desktop-linux buildx build --platform linux/amd64 --load -t wagnerpaul/${SLD}-main-app:${1} . && \
+        echo $(yellowprint "Building ${IMAGE}:${1} for linux/amd64 on this Mac") && \
+        docker --context "$BUILDER" buildx build --platform linux/amd64 --load -t ${IMAGE}:${1} . && \
         echo $(yellowprint "Copying the image to ${DOCKER_CONTEXT}") && \
-        docker --context desktop-linux save wagnerpaul/${SLD}-main-app:${1} | docker load && \
+        docker --context "$BUILDER" save ${IMAGE}:${1} | docker load && \
         docker-compose up -d --no-deps --no-build --force-recreate ${1}
     else
         redprint "Canceling app deployement to $1."
@@ -89,16 +105,16 @@ fn_deployapp() {
 fn_promoteapp() {
     if fn_confirm "Would you really like to promote staging app to $1? [y/N]"
     then
-        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
         echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
         echo $(yellowprint "Tagging image ${SLD}-main-app:stg as ${SLD}-main-app:latest") && \
-        docker tag wagnerpaul/${SLD}-main-app:stg wagnerpaul/${SLD}-main-app:latest && \
+        docker tag ${IMAGE}:stg ${IMAGE}:latest && \
         echo $(yellowprint "Pushing image ${SLD}-main-app:latest") && \
-        docker push wagnerpaul/${SLD}-main-app:latest && \
+        docker push ${IMAGE}:latest && \
         echo $(yellowprint "Tagging image ${SLD}-main-app:latest as ${SLD}-main-app:`date +%Y%m%d`") && \
-        docker tag wagnerpaul/${SLD}-main-app:latest wagnerpaul/${SLD}-main-app:`date +%Y%m%d` && \
+        docker tag ${IMAGE}:latest ${IMAGE}:`date +%Y%m%d` && \
         echo $(yellowprint "Pushing image ${SLD}-main-app:`date +%Y%m%d`") && \
-        docker push wagnerpaul/${SLD}-main-app:`date +%Y%m%d` && \
+        docker push ${IMAGE}:`date +%Y%m%d` && \
         docker-compose -f docker-compose.prod.yml up -d --force-recreate
         echo $(yellowprint "Clearing Cache On $1") && \
         docker exec -it ${SLD}-${1} sh -c 'rm -rf /app/storage/cache/* && mkdir -p "/app/storage/cache/$SERVER_NAME/pages" && chown -R www-data:www-data /app/storage/cache'
@@ -112,7 +128,7 @@ fn_promotecontent() {
     if fn_confirm "Would you really like to promote staging content to $1?
 This will DELETE AND REPLACE all content on $1. [y/N]"
     then
-        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
         echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
         echo $(yellowprint "Deleting Content On $1") && \
         docker exec -it ${SLD}-${1} sh -c 'rm -rf /app/content/*'  && \
@@ -158,7 +174,7 @@ fn_pushcontent_atomic() {
         return 1
     fi
 
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" || return 1
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" || return 1
     echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT})
 
     docker rm -f "$sync_container" >/dev/null 2>&1 || true
@@ -179,7 +195,7 @@ fn_pushcontent_atomic() {
     }
 
     yellowprint "Backing up current staging content before replacement."
-    docker exec "${SLD}-content-backups-stg" backup || {
+    docker exec "${SLD}-content-backups-stg" /etc/periodic/daily/jobrunner || {
         redprint "Backup failed. Staging was not changed."
         docker rm -f "$sync_container" >/dev/null
         return 1
@@ -221,7 +237,7 @@ fn_verify_staging_https() {
     local https_media_count
     local attempt=1
 
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" || return 1
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" || return 1
 
     # The staging page cache stores absolute media URLs. Remove the homepage
     # entry before verification so an internal HTTP request cannot persist
@@ -271,7 +287,7 @@ fn_synccontent() {
     local sync_dir
     sync_dir=$(mktemp -d "${TMPDIR:-/tmp}/${SLD}-content-sync.XXXXXX") || return 1
 
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" || return 1
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" || return 1
     echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT})
     docker cp "${SLD}-${source}:/app/content" "${sync_dir}/" || return 1
 
@@ -293,28 +309,28 @@ fn_synccontent() {
 }
 
 fn_backup() {
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
     echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
     echo $(yellowprint "Backing Up Content On $1") && \
-    docker exec ${SLD}-content-backups-${1} backup  && \
+    docker exec ${SLD}-content-backups-${1} /etc/periodic/daily/jobrunner  && \
     echo $(yellowprint "Backing Up Accounts On $1") && \
-    docker exec ${SLD}-accounts-backups-${1} backup
+    docker exec ${SLD}-accounts-backups-${1} /etc/periodic/daily/jobrunner
 }
 
 fn_listbackups() {
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
     echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
     echo $(yellowprint "Content Backups On $1") && \
-    docker exec ${SLD}-content-backups-${1} list  && \
+    docker exec ${SLD}-content-backups-${1} sh -c 'dup collection-status $DST'  && \
     echo $(yellowprint "Accounts Backups On $1") && \
-    docker exec ${SLD}-accounts-backups-${1} list
+    docker exec ${SLD}-accounts-backups-${1} sh -c 'dup collection-status $DST'
 }
 fn_recreatebackups() { # stg
     # Picks up .env (new B2 key, endpoint) and compose changes. The duplicity
     # cache lives in a named volume, so the chain continues without a re-sync.
     if fn_confirm "Recreate the $1 backup containers from .env and docker-compose.yml? [y/N]"
     then
-        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+        export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
         echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
         docker-compose up -d --no-deps --force-recreate backups-content-${1} backups-accounts-${1} && \
         fn_backup "$1"
@@ -332,16 +348,16 @@ $(greenprint 'Restore time point should be considered carefully.')
 
 $(yellowprint 'Command Example')
 $(blueprint 'set -o allexport; source .env; set +o allexport && \')
-$(blueprint 'export DOCKER_CONTEXT=blt-pub02 && \')
-$(blueprint "docker exec ${SLD}-content-backups-${1} restore -t 3D")
+$(blueprint "export DOCKER_CONTEXT=$SERVER && \\")
+$(blueprint "docker exec ${SLD}-content-backups-${1} sh -c 'dup restore -t 3D --force \$DST \$SRC'")
 
 $(yellowprint 'Documentation')
-$(cyanprint 'https://github.com/blacklabelops/volumerize')
+$(cyanprint 'https://github.com/Tecnativa/docker-duplicity')
     "
 }
 
 fn_getshell() {
-    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-blt-pub02}" && \
+    export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
     echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
     echo $(yellowprint "Getting shell for:") $(blueprint ${1} ) && \
     docker exec -it ${SLD}-${1} /bin/sh
@@ -349,8 +365,8 @@ fn_getshell() {
 
 fn_buildimage(){
     # local image for menu_localhost; built on the Mac, never on the host
-    echo $(yellowprint "Building wagnerpaul/${SLD}-main-app:${1} on this Mac") && \
-    docker --context desktop-linux build -t wagnerpaul/${SLD}-main-app:${1} .
+    echo $(yellowprint "Building ${IMAGE}:${1} on this Mac") && \
+    docker --context "$BUILDER" build -t ${IMAGE}:${1} .
 }
 
 ### Menus ##
@@ -427,11 +443,11 @@ Choose an option:  "
         menu_localhost
         ;;
     2)
-        DOCKER_CONTEXT='desktop-linux' fn_buildimage local menu_localhost
+        fn_buildimage local menu_localhost
         menu_localhost
         ;;
     3)
-        docker run -d -v "`pwd`":/app -p 80:80 -e ENABLE_PANEL=true --name ${SLD}-local wagnerpaul/${SLD}-main-app:local
+        docker run -d -v "`pwd`":/app -p 80:80 -e ENABLE_PANEL=true --name ${SLD}-local ${IMAGE}:local
         menu_localhost
         ;;
     m)
@@ -489,7 +505,7 @@ $(magentaprint 'CHOOSE DOCKER TARGET')
 $(greenprint '1)') Staging
 $(blueprint '2)') Localhost
 $(cyanprint '3)') Production
-$(yellowprint '4)') SSH to blt-pub02
+$(yellowprint '4)') SSH to $SERVER
 
 $(redprint '0)') Exit
 Choose an option:  "

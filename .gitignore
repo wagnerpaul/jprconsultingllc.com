@@ -16,7 +16,9 @@ backups
 content-starter
 site-starter
 .htpasswd
+/content/
+/public/assets/css/site.css
+site/cache/
 # anchored: a bare "content" also ignores kirby/src/Content on
 # case-insensitive filesystems, shipping an incomplete Kirby core
-/content/
 uikit.app.min.css

@@ -1,8 +1,3 @@
-# Same compose project as staging (see docker-compose.yml).
-name: jprconsulting-website-kirby
-
-version: '2'
-
 volumes:
   content:
     external: true
@@ -23,7 +18,7 @@ services:
   prod:
     #no build directive to prevent accidental builds
     #use: build: .
-    image: wagnerpaul/${SLD}-main-app:latest
+    image: ${IMAGE}:latest
     volumes:
       - content:/app/content
       - media:/app/public/media
@@ -36,7 +31,7 @@ services:
       ENABLE_PANEL: 'false'
       ENABLE_PW: 'false'
       LETSENCRYPT_HOST: www.${SLD}.${TLD}, ${SLD}.${TLD}
-      LETSENCRYPT_EMAIL: jeremy@korb.studio
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
       # app secrets and settings from the 1Password Environment (.env)
       EMAIL_TRANSPORT_HOST: ${EMAIL_TRANSPORT_HOST}
       EMAIL_TRANSPORT_USERNAME: ${EMAIL_TRANSPORT_USERNAME}
@@ -49,5 +44,5 @@ services:
 
 networks:
   default:
-    external:
-      name: proxy-network
+    external: true
+    name: ${PROXY_NETWORK}
