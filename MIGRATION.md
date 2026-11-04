@@ -1,6 +1,6 @@
 # Kirby 5 migration
 
-Branch `jprconsultingllc.com`. Target: Kirby 5.6.x on PHP 8.4, following
+Branch `main` (named `jprconsultingllc.com` until 2026-11-04). Target: Kirby 5.6.x on PHP 8.4, following
 the playbook proven on blackletter (blt-main-app/KIRBY5_MIGRATION.md).
 Trigger: PHP 8.1 is EOL.
 
