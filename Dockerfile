@@ -37,10 +37,11 @@ RUN apk add --no-cache --virtual .build-deps \
     apk del .build-deps && \
     rm -fr /tmp/pear /var/cache/apk/*
 
-# php.ini: production defaults plus Kirby upload sizes
+# php.ini: production defaults plus Kirby upload sizes, no X-Powered-By header
 RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini && \
     sed -i "s|;*upload_max_filesize =.*|upload_max_filesize = 100M|" /usr/local/etc/php/php.ini && \
-    sed -i "s|;*post_max_size =.*|post_max_size = 100M|" /usr/local/etc/php/php.ini
+    sed -i "s|;*post_max_size =.*|post_max_size = 100M|" /usr/local/etc/php/php.ini && \
+    sed -i "s|;*expose_php =.*|expose_php = Off|" /usr/local/etc/php/php.ini
 
 # keep container environment visible to PHP (config.php reads getenv)
 RUN { echo '[www]'; echo 'clear_env = no'; } > /usr/local/etc/php-fpm.d/zz-env.conf
