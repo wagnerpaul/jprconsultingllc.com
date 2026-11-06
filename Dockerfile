@@ -46,6 +46,11 @@ RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini && \
 # keep container environment visible to PHP (config.php reads getenv)
 RUN { echo '[www]'; echo 'clear_env = no'; } > /usr/local/etc/php-fpm.d/zz-env.conf
 
+# php-fpm on loopback only. The base image listens on every interface, which
+# lets any container on the shared docker network speak FastCGI to it; nginx
+# in this container is the only client (fastcgi_pass 127.0.0.1:9000).
+RUN { echo '[www]'; echo 'listen = 127.0.0.1:9000'; } > /usr/local/etc/php-fpm.d/zz-listen.conf
+
 # Install composer global bin
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
