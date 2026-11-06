@@ -69,6 +69,14 @@ services:
     container_name: ${SLD}-stg
     restart: always
   backups-content-stg:
+    # Maintenance (2026-11-06): this digest is Alpine 3.23.0 with
+    # openssh-server 10.2_p1-r0, which predates the fix for CVE-2026-123158
+    # ("sshole", sshd password bypass on musl without PAM). sshd never runs in
+    # this container and no port is published, so the bug is unreachable.
+    # On the next maintenance round, move every duplicity service in this file
+    # to a newer edge digest whose openssh-server carries the fix (Alpine
+    # security build or OpenSSH 10.6p2 or later). Check a candidate with:
+    #   docker run --rm --entrypoint apk IMAGE info -v | grep openssh-server
     image: ghcr.io/tecnativa/docker-duplicity:edge@sha256:08169ebec4ebc59c0d0b702b40fc541054fc9582e2d1ca7272fd5357749077b2
     container_name: ${SLD}-content-backups-stg
     hostname: ${SLD}-content-backups-stg
