@@ -102,6 +102,9 @@ fn_deployapp() {
     fi
 }
 
+# The promote steps run docker exec without -it. -it needs a TTY, and docker
+# refuses the exec when the script is driven from a pipe or by an agent.
+# Only the shell item (fn_getshell) is interactive.
 fn_promoteapp() {
     if fn_confirm "Would you really like to promote staging app to $1? [y/N]"
     then
@@ -115,9 +118,10 @@ fn_promoteapp() {
         docker tag ${IMAGE}:latest ${IMAGE}:`date +%Y%m%d` && \
         echo $(yellowprint "Pushing image ${SLD}-main-app:`date +%Y%m%d`") && \
         docker push ${IMAGE}:`date +%Y%m%d` && \
-        docker-compose -f docker-compose.prod.yml up -d --force-recreate
+        docker-compose -f docker-compose.prod.yml up -d --force-recreate && \
         echo $(yellowprint "Clearing Cache On $1") && \
-        docker exec -it ${SLD}-${1} sh -c 'rm -rf /app/storage/cache/* && mkdir -p "/app/storage/cache/$SERVER_NAME/pages" && chown -R www-data:www-data /app/storage/cache'
+        docker exec ${SLD}-${1} sh -c 'rm -rf /app/storage/cache/* && mkdir -p "/app/storage/cache/$SERVER_NAME/pages" && chown -R www-data:www-data /app/storage/cache' || \
+        { redprint "Promotion to $1 FAILED. Nothing after the failing step ran."; return 1; }
     else
         redprint "Canceling app promotion to $1."
         $2
@@ -131,17 +135,18 @@ This will DELETE AND REPLACE all content on $1. [y/N]"
         export DOCKER_CONTEXT="${DOCKER_CONTEXT:-$SERVER}" && \
         echo $(yellowprint 'Docker context: ') $(blueprint ${DOCKER_CONTEXT}) && \
         echo $(yellowprint "Deleting Content On $1") && \
-        docker exec -it ${SLD}-${1} sh -c 'rm -rf /app/content/*'  && \
+        docker exec ${SLD}-${1} sh -c 'rm -rf /app/content/*'  && \
         echo $(yellowprint "Copying Content from stg to $1") && \
-        docker container run --rm -it \
+        docker container run --rm \
            -v ${SLD}-stg-content:/from \
            -v ${SLD}-prod-content:/to \
            alpine ash -c "cd /from ; cp -av . /to" && \
         echo $(yellowprint "Setting Permissions On $1") && \
-        docker exec -it ${SLD}-${1} sh -c 'chown -R www-data:www-data /app/content' && \
+        docker exec ${SLD}-${1} sh -c 'chown -R www-data:www-data /app/content' && \
         echo $(yellowprint "Deleting Cache On $1") && \
-        docker exec -it ${SLD}-${1} sh -c 'rm -rf /app/storage/cache/* && mkdir -p "/app/storage/cache/$SERVER_NAME/pages" && chown -R www-data:www-data /app/storage/cache' && \
-        echo $(yellowprint "Finished Content Push to $1")
+        docker exec ${SLD}-${1} sh -c 'rm -rf /app/storage/cache/* && mkdir -p "/app/storage/cache/$SERVER_NAME/pages" && chown -R www-data:www-data /app/storage/cache' && \
+        echo $(yellowprint "Finished Content Push to $1") || \
+        { redprint "Content promotion to $1 FAILED. Nothing after the failing step ran."; return 1; }
     else
         redprint "Canceling content promotion to $1."
         $2
